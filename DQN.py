@@ -49,21 +49,27 @@ def update(xu_batch, cost_batch, xu_next_batch, Q, Q_target, critic_optimizer, g
         Q_value = Q(xu_batch, training=True)                         
         # Critic's loss function. tf.math.reduce_mean() computes the mean
         # of elements across dimensions of a tensor
-        Q_loss = tf.math.reduce_mean(tf.math.square(y - Q_value))  
+        Q_loss = tf.math.reduce_mean(tf.math.square(y - Q_value))
     # Compute the gradients of the critic loss w.r.t. critic's parameters (weights and biases)
     Q_grad = tape.gradient(Q_loss, Q.trainable_variables)          
     # Update the critic backpropagating the gradients
     critic_optimizer.apply_gradients(zip(Q_grad, Q.trainable_variables))
 
-def pick_control(nu, Q, x, u_, epsilon):
+def pick_control_epsilon_greedy(nu, Q, x, u_, epsilon):
     ''' Pick control by epsilon-greedy strategy '''
     if uniform(0,1) < epsilon:
         u = randint(nu)
     else:
-        x_  = np.repeat(x, nu, axis=1)
-        xu_ = np.concatenate((x_,u_))
-        y_  = Q.predict(xu_.T)
-        u   = np.argmin(y_)
+        u = pick_control_by_dqn(nu, Q, x, u_)
+    
+    return u
+
+def pick_control_by_dqn(nu, Q, x, u_):
+    ''' Pick the control by DQN '''
+    x_  = np.repeat(x, nu, axis=1)
+    xu_ = np.concatenate((x_,u_))
+    y_  = Q.predict(xu_.T)
+    u   = np.argmin(y_)
     
     return u
 
@@ -88,12 +94,28 @@ def preprocess_batch(batch, nu):
     
     return xu_batch, cost_batch, xu_next_batch
 
+def render_dqn(env, Q, gamma, maxiter=200):
+    '''Roll-out from random state using trained DQN.'''
+    x0 = x = env.reset()
+    costToGo = 0.0
+    gamma_i = 1
+    u_one_hot = u2one_hot(env.nu, np.arange(env.nu))
+    
+    for i in range(maxiter):
+        u = pick_control_by_dqn(env.nu, Q, x, u_one_hot)
+        x, cost = env.step(u)
+        costToGo += gamma_i*cost
+        gamma_i *= gamma
+        env.render()
+    print("Real cost to go of state", x0.squeeze(), ":", costToGo)
+
 def DQN_learning(env, Q, Q_target, gamma, nEpisodes, maxEpisodeLength,
                  epsilon, epsilon_decay, min_epsilon,
                  batch_size, sampling_steps, update_Q_target_steps,
-                 replay_buffer, min_buffer_size, critic_optimizer):
+                 replay_buffer, min_buffer_size, critic_optimizer, nprint=100):
     
     h_ctg = []
+    best_ctg = np.inf
     steps = 0
     u_one_hot = u2one_hot(env.nu, np.arange(env.nu))
     
@@ -114,7 +136,7 @@ def DQN_learning(env, Q, Q_target, gamma, nEpisodes, maxEpisodeLength,
                 batch = sample(replay_buffer, batch_size)
                 xu_batch, cost_batch, xu_next_batch = preprocess_batch(batch, env.nu)
                 update(xu_batch, cost_batch, xu_next_batch, Q, Q_target, critic_optimizer, gamma)
-            
+                
             if steps % update_Q_target_steps == 0:
                 # Regularly update weights of target network
                 Q_target.set_weights(Q.get_weights())
@@ -123,10 +145,17 @@ def DQN_learning(env, Q, Q_target, gamma, nEpisodes, maxEpisodeLength,
             cost_to_go += gamma_i * cost
             gamma_i *= gamma
         
+        if cost_to_go < best_ctg:
+            # Save NN weights to file (in HDF5)
+            Q.save_weights("model/dqn.h5")
+            best_ctg = cost_to_go
+        
         epsilon = max(min_epsilon, np.exp(-epsilon_decay*episode))
         h_ctg.append(cost_to_go)
         
-        print('episode {} cost-to-go {}'.format(episode, cost_to_go))
+        if episode % nprint == 0:
+            print('Episode #%d done with cost %d and %.1f exploration prob' % (
+                  episode, np.mean(h_ctg[-nprint:]), 100*epsilon))
     
     return Q, h_ctg
 
@@ -168,19 +197,16 @@ if __name__=='__main__':
     
     # Set replay buffer
     replay_buffer = deque(maxlen=REPLAY_BUFFER_SIZE)
-    rb = deque(maxlen=30)
     
-    Q, h_ctg = DQN_learning(env, Q, Q_target, GAMMA, NEPISODES, MAX_EPISODE_LENGTH,
-                            EPSILON, EPSILON_DECAY, MIN_EPSILON,
-                            BATCH_SIZE, SAMPLING_STEPS, UPDATE_Q_TARGET_STEPS,
-                            replay_buffer, MIN_BUFFER_SIZE, critic_optimizer)
+#    Q, h_ctg = DQN_learning(env, Q, Q_target, GAMMA, NEPISODES, MAX_EPISODE_LENGTH,
+#                            EPSILON, EPSILON_DECAY, MIN_EPSILON,
+#                            BATCH_SIZE, SAMPLING_STEPS, UPDATE_Q_TARGET_STEPS,
+#                            replay_buffer, MIN_BUFFER_SIZE, critic_optimizer)
     
-    plt.plot( np.cumsum(h_ctg)/range(1,NEPISODES+1) )
-    plt.title ("Average cost-to-go")
-    plt.show()
-    
-    # Save NN weights to file (in HDF5)
-    Q.save_weights("/namefile.h5")
+#    plt.plot( np.cumsum(h_ctg)/range(1,NEPISODES+1) )
+#    plt.title ("Average cost-to-go")
+#    plt.show()
     
     # Load NN weights from file
-    Q.load_weights("namefile.h5")
+    Q.load_weights("model/dqn.h5")
+    render_dqn(env, Q, GAMMA)
