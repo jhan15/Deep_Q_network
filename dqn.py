@@ -28,11 +28,15 @@ MIN_EPSILON            = 0.001         # Minimum of exploration probability
 
 
 class DQN:
+    ''' Deep Q Network algorithm '''
     
     def __init__(self, nu):
         self.nu = nu
-        self.env = HPendulum(nu)
+        self.env = HPendulum(self.nu)
         self.nx = self.env.nx
+        
+        self.Q = self.get_critic()
+        self.Q.summary()
 
     def get_critic(self):
         ''' Create the neural network to represent the Q function '''
@@ -82,26 +86,8 @@ class DQN:
         
         return u
 
-    def render(self, maxiter=100):
-        '''Roll-out from random state using trained DQN.'''
-        x0 = x = self.env.reset()
-        costToGo = 0.0
-        gamma_i = 1
-        
-        for i in range(maxiter):
-            u = np.argmin(self.Q.predict(x.T))
-            x, cost = self.env.step(u)
-            costToGo += gamma_i*cost
-            gamma_i *= GAMMA
-            self.env.render()
-        
-        print("Real cost to go of state", x0.squeeze(), ":", costToGo)
-
     def learning(self, nprint=100):
         ''' Learning of DQN algorithm '''
-        self.Q = self.get_critic()
-        self.Q.summary()
-        
         self.Q_target = self.get_critic()
         self.Q_target.set_weights(self.Q.get_weights())
         
@@ -126,12 +112,12 @@ class DQN:
                 done = True if step == MAX_EPISODE_LENGTH - 1 else False
                 self.replay_buffer.append([x, u, cost, x_next, done])
                 
+                # Regularly update weights of target network
                 if steps % UPDATE_Q_TARGET_STEPS == 0:
-                    # Regularly update weights of target network
                     self.Q_target.set_weights(self.Q.get_weights())
                 
+                # Sampling from replay buffer and train
                 if len(self.replay_buffer) > MIN_BUFFER_SIZE and steps % SAMPLING_STEPS == 0:
-                    # Sampling from replay buffer and train
                     batch = sample(self.replay_buffer, BATCH_SIZE)
                     self.update(batch)
                 
@@ -140,23 +126,47 @@ class DQN:
                 gamma_i *= GAMMA
                 steps += 1
             
-            if cost_to_go < best_ctg:
-                # Save NN weights to file (in HDF5)
+            # Save NN weights to file (in HDF5)
+            if cost_to_go < self.best_ctg:
                 self.Q.save_weights("model/dqn.h5")
-                best_ctg = cost_to_go
+                self.best_ctg = cost_to_go
             
             epsilon = max(MIN_EPSILON, np.exp(-EPSILON_DECAY*episode))
-            h_ctg.append(cost_to_go)
+            self.h_ctg.append(cost_to_go)
             
             if episode % nprint == 0:
                 print('Episode #%d done with cost %d and %.1f exploration prob' % (
-                      episode, np.mean(h_ctg[-nprint:]), 100*epsilon))
+                      episode, np.mean(self.h_ctg[-nprint:]), 100*epsilon))
+        
+        self.plot_h_ctg()
     
     def plot_h_ctg(self):
         ''' Plot the average cost-to-go history '''
         plt.plot(np.cumsum(self.h_ctg)/range(1,NEPISODES+1))
         plt.title ("Average cost-to-go")
         plt.show()
+    
+    def render(self, x=None, maxiter=100):
+        '''Roll-out from random state using trained DQN.'''
+        # Load NN weights from file
+        self.Q.load_weights("model/dqn.h5")
+        
+        if x is None:
+            x0 = x = self.env.reset()
+        else:
+            x0 = x
+        
+        costToGo = 0.0
+        gamma_i = 1
+        
+        for i in range(maxiter):
+            u = np.argmin(self.Q.predict(x.T))
+            x, cost = self.env.step(u)
+            costToGo += gamma_i*cost
+            gamma_i *= GAMMA
+            self.env.render()
+        
+        print("Real cost to go of state", x0.squeeze(), ":", costToGo)
 
 if __name__=='__main__':
     ### --- Random seed
@@ -165,14 +175,6 @@ if __name__=='__main__':
     np.random.seed(RANDOM_SEED)
     
     nu = 11
-    dqn = DQN(nu=11)
-    
-    train = True
-    if train:
-        dqn.learning()
-        dqn.plot_h_ctg()
-    
-    # Load NN weights from file
-    dqn.Q.load_weights("model/dqn.h5")
+    dqn = DQN(nu)
+    dqn.learning()
     dqn.render()
-    
