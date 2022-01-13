@@ -28,8 +28,8 @@ class HPendulum:
         iu = np.clip(iu,0,self.nu-1) - (self.nu-1)/2
         return iu*self.DU
     
-    def reset(self):
-        self.x = self.pendulum.reset()
+    def reset(self, x=None):
+        self.x = self.pendulum.reset(x)
         return self.x
 
     def step(self,iu):
