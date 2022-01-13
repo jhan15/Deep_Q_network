@@ -18,7 +18,7 @@ BATCH_SIZE             = 32            # Batch size sampled from replay buffer
 REPLAY_BUFFER_SIZE     = 50000         # Size of replay buffer
 MIN_BUFFER_SIZE        = 1000          # Minimum buffer size to start training
 UPDATE_Q_TARGET_STEPS  = 100           # Steps to update Q target
-NEPISODES              = 300          # Number of training episodes
+NEPISODES              = 5000          # Number of training episodes
 MAX_EPISODE_LENGTH     = 100           # Max episode length
 QVALUE_LEARNING_RATE   = 0.001         # Learning rate of DQN
 GAMMA                  = 0.9           # Discount factor 
@@ -33,16 +33,6 @@ class DQN:
         self.nu = nu
         self.env = HPendulum(nu)
         self.nx = self.env.nx
-        
-        self.Q = self.get_critic()
-        self.Q.summary()
-        self.Q_target = self.get_critic()
-        self.Q_target.set_weights(self.Q.get_weights())
-        
-        self.optimizer = tf.keras.optimizers.Adam(QVALUE_LEARNING_RATE)
-        self.replay_buffer = deque(maxlen=REPLAY_BUFFER_SIZE)
-        
-        self.h_ctg = []
 
     def get_critic(self):
         ''' Create the neural network to represent the Q function '''
@@ -109,7 +99,18 @@ class DQN:
 
     def learning(self, nprint=100):
         ''' Learning of DQN algorithm '''
-        best_ctg = np.inf
+        self.Q = self.get_critic()
+        self.Q.summary()
+        
+        self.Q_target = self.get_critic()
+        self.Q_target.set_weights(self.Q.get_weights())
+        
+        self.optimizer = tf.keras.optimizers.Adam(QVALUE_LEARNING_RATE)
+        self.replay_buffer = deque(maxlen=REPLAY_BUFFER_SIZE)
+        
+        self.h_ctg = []
+        self.best_ctg = np.inf
+        
         steps = 0
         epsilon = EPSILON
         
@@ -145,11 +146,11 @@ class DQN:
                 best_ctg = cost_to_go
             
             epsilon = max(MIN_EPSILON, np.exp(-EPSILON_DECAY*episode))
-            self.h_ctg.append(cost_to_go)
+            h_ctg.append(cost_to_go)
             
             if episode % nprint == 0:
                 print('Episode #%d done with cost %d and %.1f exploration prob' % (
-                      episode, np.mean(self.h_ctg[-nprint:]), 100*epsilon))
+                      episode, np.mean(h_ctg[-nprint:]), 100*epsilon))
     
     def plot_h_ctg(self):
         ''' Plot the average cost-to-go history '''
