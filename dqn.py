@@ -14,12 +14,12 @@ np_config.enable_numpy_behavior()
 
 ### --- Hyper paramaters
 SAMPLING_STEPS         = 4             # Steps to sample from replay buffer
-BATCH_SIZE             = 32            # Batch size sampled from replay buffer
+BATCH_SIZE             = 64            # Batch size sampled from replay buffer
 REPLAY_BUFFER_SIZE     = 50000         # Size of replay buffer
-MIN_BUFFER_SIZE        = 1000          # Minimum buffer size to start training
+MIN_BUFFER_SIZE        = 5000          # Minimum buffer size to start training
 UPDATE_Q_TARGET_STEPS  = 100           # Steps to update Q target
-NEPISODES              = 5000          # Number of training episodes
-MAX_EPISODE_LENGTH     = 100           # Max episode length
+NEPISODES              = 3000          # Number of training episodes
+MAX_EPISODE_LENGTH     = 200           # Max episode length
 QVALUE_LEARNING_RATE   = 0.001         # Learning rate of DQN
 GAMMA                  = 0.9           # Discount factor 
 EPSILON                = 1             # Initial exploration probability of eps-greedy policy
@@ -30,9 +30,10 @@ MIN_EPSILON            = 0.001         # Minimum of exploration probability
 class DQN:
     ''' Deep Q Network algorithm '''
     
-    def __init__(self, nu):
+    def __init__(self, nu, nbJoint=1, dt=0.1):
         self.nu = nu
-        self.env = HPendulum(self.nu)
+        self.nbJoint = nbJoint
+        self.env = HPendulum(self.nbJoint, self.nu, dt=dt)
         self.nx = self.env.nx
         
         self.Q = self.get_critic()
@@ -45,7 +46,7 @@ class DQN:
         state_out2 = layers.Dense(32, activation="relu")(state_out1) 
         state_out3 = layers.Dense(64, activation="relu")(state_out2) 
         state_out4 = layers.Dense(64, activation="relu")(state_out3)
-        outputs = layers.Dense(self.nu)(state_out4)
+        outputs = layers.Dense(self.nbJoint*self.nu)(state_out4)
     
         model = tf.keras.Model(inputs, outputs)
     
@@ -53,25 +54,35 @@ class DQN:
 
     def update(self, batch):
         ''' Update the weights of the Q network using the specified batch of data '''
-        x_batch      = np.array([sample[0] for sample in batch]).squeeze()
+        x_batch      = np.array([sample[0] for sample in batch])
         u_batch      = np.array([sample[1] for sample in batch])
         cost_batch   = np.array([sample[2] for sample in batch])
-        x_next_batch = np.array([sample[3] for sample in batch]).squeeze()
+        x_next_batch = np.array([sample[3] for sample in batch])
         done_batch   = np.array([sample[4] for sample in batch])
         
+        n = len(batch)
+        
         with tf.GradientTape() as tape:
-            target_value = np.min(self.Q_target(x_next_batch, training=True), axis=1)
+            # Compute Q target
+            target_output = self.Q_target(x_next_batch, training=True).reshape((n,-1,self.nbJoint))
+            target_value  = tf.math.reduce_sum(np.min(target_output, axis=1), axis=1)
             
             # Compute 1-step targets for the critic loss
-            y = np.zeros(len(batch))
+            y = np.zeros(n)
             for id, done in enumerate(done_batch):
                 if done:
                     y[id] = cost_batch[id]
                 else:
-                    y[id] = cost_batch[id] + GAMMA*target_value[id]            
+                    y[id] = cost_batch[id] + GAMMA*target_value[id]      
             
-            Q_output = self.Q(x_batch, training=True)
-            Q_value  = Q_output[np.arange(len(batch)), u_batch]
+            # Compute Q
+            Q_output = self.Q(x_batch, training=True).reshape((n,-1,self.nbJoint))
+            d1 = np.repeat(np.arange(n),self.nbJoint).reshape(n,-1)
+            d2 = u_batch.reshape(n,-1)
+            d3 = np.repeat(np.arange(self.nbJoint).reshape(1,-1),n,axis=0)
+            Q_value  = tf.math.reduce_sum(Q_output[d1, d2, d3], axis=1)
+            
+            # Compute Q loss
             Q_loss = tf.math.reduce_mean(tf.math.square(y - Q_value))
         
         Q_grad = tape.gradient(Q_loss, self.Q.trainable_variables)
@@ -80,10 +91,13 @@ class DQN:
     def pick_control(self, x, epsilon):
         ''' Pick control by epsilon-greedy strategy '''
         if uniform(0,1) < epsilon:
-            u = randint(self.nu)
+            u = randint(self.nu, size=self.nbJoint)
         else:
-            u = np.argmin(self.Q.predict(x.T))
-        
+            pred = self.Q.predict(x.reshape(1,-1))
+            u = np.argmin(pred.reshape(self.nu,self.nbJoint), axis=0)
+    
+        if len(u) == 1:
+            u = u[0]
         return u
 
     def learning(self, nprint=100):
@@ -99,6 +113,8 @@ class DQN:
         
         steps = 0
         epsilon = EPSILON
+        
+        t = time.time()
         
         for episode in range(NEPISODES):
             cost_to_go = 0.0
@@ -135,8 +151,10 @@ class DQN:
             self.h_ctg.append(cost_to_go)
             
             if episode % nprint == 0:
-                print('Episode #%d done with cost %d and %.1f exploration prob' % (
-                      episode, np.mean(self.h_ctg[-nprint:]), 100*epsilon))
+                dt = time.time() - t
+                t = time.time()
+                print('Episode #%d done with cost %.1f and %.1f exploration prob, used %.1f s' % (
+                      episode, np.mean(self.h_ctg[-nprint:]), 100*epsilon, dt))
         
         self.plot_h_ctg()
     
@@ -146,7 +164,7 @@ class DQN:
         plt.title ("Average cost-to-go")
         plt.show()
     
-    def render(self, x=None, maxiter=100):
+    def render(self, x=None, maxiter=150):
         '''Roll-out from random state using trained DQN.'''
         # Load NN weights from file
         self.Q.load_weights("model/dqn.h5")
@@ -160,13 +178,16 @@ class DQN:
         gamma_i = 1
         
         for i in range(maxiter):
-            u = np.argmin(self.Q.predict(x.T))
+            pred = self.Q.predict(x.reshape(1,-1))
+            u = np.argmin(pred.reshape(self.nu,self.nbJoint), axis=0)
+            if len(u) == 1:
+                u = u[0]
             x, cost = self.env.step(u)
             costToGo += gamma_i*cost
             gamma_i *= GAMMA
             self.env.render()
         
-        print("Real cost to go of state", x0.squeeze(), ":", costToGo)
+        print("Real cost to go of state", x0, ":", costToGo)
 
 if __name__=='__main__':
     ### --- Random seed
@@ -175,6 +196,8 @@ if __name__=='__main__':
     np.random.seed(RANDOM_SEED)
     
     nu = 11
-    dqn = DQN(nu)
-    dqn.learning()
+    nbJoint = 2
+    dqn = DQN(nu,nbJoint)
+    
+    #dqn.learning()
     dqn.render()

@@ -9,8 +9,9 @@ class HPendulum:
         torque are discretized with the specified steps. Torque is saturated.
         Guassian noise can be added in the dynamics.
     '''
-    def __init__(self, nu=11, uMax=5, dt=0.2, ndt=1, noise_stddev=0):
-        self.pendulum = Pendulum(1,noise_stddev)
+    def __init__(self, nbJoint=1, nu=11, uMax=5, dt=0.2, ndt=1, noise_stddev=0):
+        self.nbJoint  = nbJoint
+        self.pendulum = Pendulum(self.nbJoint,noise_stddev)
         self.pendulum.DT  = dt
         self.pendulum.NDT = ndt
         self.nu = nu        # Number of discretization steps for joint torque
@@ -21,7 +22,7 @@ class HPendulum:
     # Continuous to discrete
     def c2du(self, u):
         u = np.clip(u,-self.uMax+1e-3,self.uMax-1e-3)
-        return int(np.floor((u+self.uMax)/self.DU))
+        return np.floor((u+self.uMax)/self.DU).astype(int)
     
     # Discrete to continuous
     def d2cu(self, iu):

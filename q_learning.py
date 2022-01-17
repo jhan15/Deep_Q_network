@@ -110,7 +110,7 @@ if __name__=='__main__':
     
     ### --- Hyper paramaters
     NEPISODES               = 5000          # Number of training episodes
-    NPRINT                  = 100           # print something every NPRINT episodes
+    NPRINT                  = 500           # print something every NPRINT episodes
     MAX_EPISODE_LENGTH      = 100           # Max episode length
     LEARNING_RATE           = 0.8           # alpha coefficient of Q learning algorithm
     DISCOUNT                = 0.9           # Discount factor 
